@@ -8,11 +8,7 @@ import (
 
 func Register(c *gin.Context) {
 	var input map[string]string
-
-	if err := c.BindJSON(&input); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
+	c.BindJSON(&input)
 
 	err := services.RegisterUser(input)
 	if err != nil {
@@ -25,7 +21,6 @@ func Register(c *gin.Context) {
 
 func Login(c *gin.Context) {
 	var input map[string]string
-
 	c.BindJSON(&input)
 
 	token, err := services.LoginUser(input)

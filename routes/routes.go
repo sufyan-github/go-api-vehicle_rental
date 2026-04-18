@@ -24,9 +24,18 @@ func SetupRoutes(r *gin.Engine) {
 	auth := r.Group("/api")
 	auth.Use(middleware.AuthMiddleware())
 
-	auth.GET("/profile", controllers.Profile)
+	auth.GET("/profile", func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		c.JSON(200, gin.H{"user_id": userID})
+	})
+
+	admin := r.Group("/admin")
+	admin.Use(middleware.AuthMiddleware(), middleware.AdminMiddleware())
+
 	auth.POST("/vehicles", controllers.CreateVehicle)
 	auth.POST("/bookings", controllers.CreateBooking)
 	auth.GET("/bookings", controllers.GetBookings)
 	auth.PUT("/bookings/:id/cancel", controllers.CancelBooking)
+
+	admin.POST("/vehicles", controllers.CreateVehicle)
 }
