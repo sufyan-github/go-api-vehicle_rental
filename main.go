@@ -25,5 +25,16 @@ func main() {
 		})
 	})
 
+	r.POST("/user", func(c *gin.Context) {
+	var body map[string]string
+
+	c.BindJSON(&body)
+
+	c.JSON(200, gin.H{
+		"name": body["name"],
+		"message": "User created",
+	})
+})
+
 	r.Run(":8080")
 }
