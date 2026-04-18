@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"go-api/config"
+	"go-api/middleware"
 	"go-api/models"
-
 	"go-api/utils"
 
 	"github.com/gin-gonic/gin"
@@ -15,203 +15,147 @@ import (
 )
 
 func main() {
-	// Initialize router
 	r := gin.Default()
 
-	// Connect to Database
 	config.ConnectDB()
 
-	// Auto migrate models
-	if err := config.DB.AutoMigrate(&models.User{}); err != nil {
-		log.Fatal("❌ Failed to migrate database:", err)
+	if err := config.DB.AutoMigrate(
+		&models.User{},
+		&models.Vehicle{},
+		&models.Booking{},
+	); err != nil {
+		log.Fatal("Migration failed:", err)
 	}
 
-	// Setup routes
 	setupRoutes(r)
 
-	// Start server
-	if err := r.Run(":8080"); err != nil {
-		log.Fatal("❌ Failed to start server:", err)
-	}
+	r.Run(":8080")
 }
 
 func setupRoutes(r *gin.Engine) {
 
-	// Health check
+	// Health
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "UP",
-		})
+		c.JSON(200, gin.H{"status": "UP"})
 	})
 
-	// Group: Users
 	userRoutes := r.Group("/users")
-	{
-		// Create User
-		userRoutes.POST("/", func(c *gin.Context) {
-			var user models.User
 
-			if err := c.BindJSON(&user); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": err.Error(),
-				})
-				return
-			}
+	// Register
+	userRoutes.POST("/register", func(c *gin.Context) {
+		var user models.User
 
-			config.DB.Create(&user)
+		if err := c.BindJSON(&user); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
 
-			c.JSON(http.StatusCreated, user)
-		})
+		hash, _ := bcrypt.GenerateFromPassword([]byte(user.Password), 10)
+		user.Password = string(hash)
 
-		// Get All Users
-		userRoutes.GET("/", func(c *gin.Context) {
-			var users []models.User
+		config.DB.Create(&user)
 
-			config.DB.Find(&users)
+		c.JSON(201, gin.H{"message": "User registered"})
+	})
 
-			c.JSON(http.StatusOK, users)
-		})
+	// Login
+	userRoutes.POST("/login", func(c *gin.Context) {
+		var input models.User
+		var user models.User
 
-		// Get Single User
-		userRoutes.GET("/:id", func(c *gin.Context) {
-			idParam := c.Param("id")
-			id, err := strconv.Atoi(idParam)
+		c.BindJSON(&input)
 
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "Invalid user ID",
-				})
-				return
-			}
+		config.DB.Where("email = ?", input.Email).First(&user)
 
-			var user models.User
+		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+			c.JSON(401, gin.H{"error": "Invalid credentials"})
+			return
+		}
 
-			if err := config.DB.First(&user, id).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{
-					"error": "User not found",
-				})
-				return
-			}
+		token, _ := utils.GenerateToken(user.ID)
 
-			c.JSON(http.StatusOK, user)
-		})
+		c.JSON(200, gin.H{"token": token})
+	})
 
-		// Update User
-		userRoutes.PUT("/:id", func(c *gin.Context) {
-			idParam := c.Param("id")
-			id, err := strconv.Atoi(idParam)
+	// Protected routes
+	protected := r.Group("/api")
+	protected.Use(middleware.AuthMiddleware())
 
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "Invalid user ID",
-				})
-				return
-			}
+	// Profile
+	protected.GET("/profile", func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
+		c.JSON(200, gin.H{"user_id": userID})
+	})
 
-			var user models.User
+	// Create Vehicle
+	protected.POST("/vehicles", func(c *gin.Context) {
+		var v models.Vehicle
+		c.BindJSON(&v)
 
-			if err := config.DB.First(&user, id).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{
-					"error": "User not found",
-				})
-				return
-			}
+		v.Available = true
+		config.DB.Create(&v)
 
-			var input models.User
-			if err := c.BindJSON(&input); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": err.Error(),
-				})
-				return
-			}
+		c.JSON(201, v)
+	})
 
-			user.Name = input.Name
-			user.Email = input.Email
+	// Get Vehicles
+	r.GET("/vehicles", func(c *gin.Context) {
+		var v []models.Vehicle
+		config.DB.Find(&v)
+		c.JSON(200, v)
+	})
 
-			config.DB.Save(&user)
+	// Create Booking
+	protected.POST("/bookings", func(c *gin.Context) {
+		var booking models.Booking
+		c.BindJSON(&booking)
 
-			c.JSON(http.StatusOK, user)
-		})
+		userID, _ := c.Get("user_id")
+		booking.UserID = uint(userID.(float64))
 
-		// Delete User
-		userRoutes.DELETE("/:id", func(c *gin.Context) {
-			idParam := c.Param("id")
-			id, err := strconv.Atoi(idParam)
+		var vehicle models.Vehicle
+		config.DB.First(&vehicle, booking.VehicleID)
 
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "Invalid user ID",
-				})
-				return
-			}
+		if !vehicle.Available {
+			c.JSON(400, gin.H{"error": "Vehicle not available"})
+			return
+		}
 
-			if err := config.DB.Delete(&models.User{}, id).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": "Failed to delete user",
-				})
-				return
-			}
+		vehicle.Available = false
+		config.DB.Save(&vehicle)
 
-			c.JSON(http.StatusOK, gin.H{
-				"message": "User deleted successfully",
-			})
-		})
+		booking.Status = "booked"
+		config.DB.Create(&booking)
 
-		// Register User
-		userRoutes.POST("/register", func(c *gin.Context) {
-			var user models.User
+		c.JSON(201, booking)
+	})
 
-			if err := c.BindJSON(&user); err != nil {
-				c.JSON(400, gin.H{"error": err.Error()})
-				return
-			}
+	// Get My Bookings
+	protected.GET("/bookings", func(c *gin.Context) {
+		userID, _ := c.Get("user_id")
 
-			// Hash password
-			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 10)
-			if err != nil {
-				c.JSON(500, gin.H{"error": "Failed to hash password"})
-				return
-			}
+		var bookings []models.Booking
+		config.DB.Where("user_id = ?", userID).Find(&bookings)
 
-			user.Password = string(hashedPassword)
+		c.JSON(200, bookings)
+	})
 
-			config.DB.Create(&user)
+	// Cancel Booking
+	protected.PUT("/bookings/:id/cancel", func(c *gin.Context) {
+		id := c.Param("id")
 
-			c.JSON(201, gin.H{"message": "User registered successfully"})
-		})
+		var booking models.Booking
+		config.DB.First(&booking, id)
 
-		// Login User
-		userRoutes.POST("/login", func(c *gin.Context) {
-			var input models.User
-			var user models.User
+		booking.Status = "cancelled"
+		config.DB.Save(&booking)
 
-			if err := c.BindJSON(&input); err != nil {
-				c.JSON(400, gin.H{"error": err.Error()})
-				return
-			}
+		var vehicle models.Vehicle
+		config.DB.First(&vehicle, booking.VehicleID)
 
-			// Find user
-			if err := config.DB.Where("email = ?", input.Email).First(&user).Error; err != nil {
-				c.JSON(401, gin.H{"error": "Invalid email"})
-				return
-			}
+		vehicle.Available = true
+		config.DB.Save(&vehicle)
 
-			// Check password
-			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
-				c.JSON(401, gin.H{"error": "Invalid password"})
-				return
-			}
-
-			// Generate token
-			token, err := utils.GenerateToken(user.ID)
-			if err != nil {
-				c.JSON(500, gin.H{"error": "Failed to generate token"})
-				return
-			}
-
-			c.JSON(200, gin.H{
-				"token": token,
-			})
-		})
-	}
+		c.JSON(200, gin.H{"message": "Booking cancelled"})
+	})
 }
