@@ -8,7 +8,10 @@ import (
 	"go-api/config"
 	"go-api/models"
 
+	"go-api/utils"
+
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -151,6 +154,63 @@ func setupRoutes(r *gin.Engine) {
 
 			c.JSON(http.StatusOK, gin.H{
 				"message": "User deleted successfully",
+			})
+		})
+
+		// Register User
+		userRoutes.POST("/register", func(c *gin.Context) {
+			var user models.User
+
+			if err := c.BindJSON(&user); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Hash password
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 10)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to hash password"})
+				return
+			}
+
+			user.Password = string(hashedPassword)
+
+			config.DB.Create(&user)
+
+			c.JSON(201, gin.H{"message": "User registered successfully"})
+		})
+
+		// Login User
+		userRoutes.POST("/login", func(c *gin.Context) {
+			var input models.User
+			var user models.User
+
+			if err := c.BindJSON(&input); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Find user
+			if err := config.DB.Where("email = ?", input.Email).First(&user).Error; err != nil {
+				c.JSON(401, gin.H{"error": "Invalid email"})
+				return
+			}
+
+			// Check password
+			if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+				c.JSON(401, gin.H{"error": "Invalid password"})
+				return
+			}
+
+			// Generate token
+			token, err := utils.GenerateToken(user.ID)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to generate token"})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"token": token,
 			})
 		})
 	}
